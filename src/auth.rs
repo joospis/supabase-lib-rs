@@ -292,13 +292,20 @@ struct PhoneSignInRequest {
     password: String,
 }
 
-/// OTP verification request
-#[derive(Debug, Serialize)]
-struct OTPVerificationRequest {
-    phone: String,
-    token: String,
+#[derive(Serialize, Debug)]
+struct EmailOTPVerificationRequest {
+    pub email: String,
+    pub token: String,
     #[serde(rename = "type")]
-    verification_type: String,
+    pub verification_type: String,
+}
+
+#[derive(Serialize, Debug)]
+struct PhoneOTPVerificationRequest {
+    pub phone: String,
+    pub token: String,
+    #[serde(rename = "type")]
+    pub verification_type: String,
 }
 
 /// Magic link request
@@ -996,38 +1003,78 @@ impl Auth {
         Ok(auth_response)
     }
 
-    /// Verify OTP token
+
+
+    /// Verifies an OTP (One-Time Password) token sent via email.
+    ///
+    /// This method handles various email-based verification flows such as 
+    /// passwordless login, email confirmation, and password recovery.
+    ///
+    /// # Arguments
+    ///
+    /// * `email` - The user's email address.
+    /// * `token` - The OTP code received by the user.
+    /// * `verification_type` - The type of verification. Common values are:
+    ///   - `"magiclink"`: For passwordless sign-in.
+    ///   - `"signup"`: For initial email confirmation.
+    ///   - `"recovery"`: For password reset flows.
     ///
     /// # Example
     ///
     /// ```rust
-    /// # async fn example() -> supabase_lib_rs::Result<()> {
-    /// let client = supabase_lib_rs::Client::new("url", "key")?;
-    ///
-    /// let response = client.auth()
-    ///     .verify_otp("+1234567890", "123456", "sms")
-    ///     .await?;
-    ///
-    /// if let Some(session) = response.session {
-    ///     println!("OTP verified, user signed in");
-    /// }
+    /// # async fn example(client: supabase::Client) -> Result<(), String> {
+    /// client.auth()
+    ///     .verify_email_otp("user@example.com", "123456", "magiclink")
+    ///     .await
+    ///     .map_err(|e| e.to_string())?;
     /// # Ok(())
     /// # }
     /// ```
+    pub async fn verify_email_otp(
+        &self,
+        email: &str,
+        token: &str,
+        verification_type: &str,
+    ) -> Result<AuthResponse> {
+        let payload = EmailOTPVerificationRequest {
+            email: email.to_string(),
+            token: token.to_string(),
+            verification_type: verification_type.to_string(),
+        };
+        self.verify_otp_internal(payload).await
+    }
+
+    /// Verifies an OTP token sent via SMS or WhatsApp.
+    ///
+    /// # Arguments
+    ///
+    /// * `phone` - The user's phone number in E.164 format (e.g., "+1234567890").
+    /// * `token` - The OTP code received by the user.
+    /// * `verification_type` - Usually `"sms"` or `"phone_change"`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the phone number format is invalid or if the OTP 
+    /// has expired or is incorrect.
     pub async fn verify_otp(
         &self,
         phone: &str,
         token: &str,
         verification_type: &str,
     ) -> Result<AuthResponse> {
-        debug!("Verifying OTP for phone: {}", phone);
-
-        let payload = OTPVerificationRequest {
+        let payload = PhoneOTPVerificationRequest {
             phone: phone.to_string(),
             token: token.to_string(),
             verification_type: verification_type.to_string(),
         };
+        self.verify_otp_internal(payload).await
+    }
 
+    /// Generic internal handler for OTP verification requests.
+    ///
+    /// This handles the HTTP POST to `/auth/v1/verify` and manages the 
+    /// session state on success.
+    async fn verify_otp_internal<T: Serialize>(&self, payload: T) -> Result<AuthResponse> {
         let response = self
             .http_client
             .post(format!("{}/auth/v1/verify", self.config.url))
@@ -1049,7 +1096,6 @@ impl Auth {
         if let Some(ref session) = auth_response.session {
             self.set_session(session.clone()).await?;
             self.trigger_auth_event(AuthEvent::SignedIn);
-            info!("OTP verified successfully");
         }
 
         Ok(auth_response)
